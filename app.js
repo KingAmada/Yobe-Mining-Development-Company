@@ -3,7 +3,7 @@
     "https://script.google.com/macros/s/AKfycbyY4en4hnSaKKcomnvLYPrCCgufqVmOQ928Dvd0Q4h4q0xpH-Tf0YfAh51Q53FpXCs/exec";
 
   const ASSETS = {
-    miningLogo: "./assets/logo.jpeg",
+    miningLogo: "./assets/Logo.jpeg",
     miningLogoFallback: "./assets/icon.svg",
     dashBg: "./assets/dashboard-bg.jpg",
   };
@@ -503,11 +503,28 @@
     const m3 = u.match(/drive\.google\.com\/uc\?(?:.*&)?id=([^&]+)/i);
     if (m3 && m3[1]) return "https://drive.google.com/uc?export=view&id=" + m3[1];
 
+    // If it's already a uc link but uses export=download, prefer export=view (better for <img>)
+    if (/drive\.google\.com\/uc\?/i.test(u) && /export=download/i.test(u)) {
+      return u.replace(/export=download/gi, "export=view");
+    }
+
     return u;
   }
 
   function resolvePhotoFromRecord(rec, fallbackUrl) {
     const raw = pickFirst(rec, [
+      "photoDataUrl",
+      "photoDataURL",
+      "PhotoDataUrl",
+      "PhotoDataURL",
+      "passportDataUrl",
+      "passportDataURL",
+      "PassportDataUrl",
+      "PassportDataURL",
+      "photoThumb",
+      "photoThumbnail",
+      "PhotoThumb",
+      "PhotoThumbnail",
       "photoURL",
       "PhotoURL",
       "photoUrl",
@@ -525,6 +542,83 @@
     ]);
     const normalized = normalizePhotoURL(normalizeDriveUrlMaybe(raw));
     return normalized || fallbackUrl || null;
+  }
+
+  function hydrateQrCodes(root) {
+    const scope = root || document;
+    const nodes = Array.from(scope.querySelectorAll("[data-qr-text]"));
+    if (!nodes.length) return;
+
+    // qrcodejs exposes global QRCode
+    if (typeof window.QRCode !== "function") {
+      nodes.forEach((el) => {
+        if (el.dataset.qrReady === "1") return;
+        el.dataset.qrReady = "1";
+        el.innerHTML =
+          '<div class="w-full h-full flex items-center justify-center text-[9px] font-mono text-gray-400">QR</div>';
+      });
+      return;
+    }
+
+    nodes.forEach((el) => {
+      const text = String(el.dataset.qrText || "").trim();
+      if (!text) return;
+      if (el.dataset.qrReady === "1") return;
+      el.dataset.qrReady = "1";
+      el.innerHTML = "";
+
+      try {
+        // Render a small QR (no external requests => html2canvas-safe)
+        // eslint-disable-next-line no-new
+        new window.QRCode(el, {
+          text,
+          width: 56,
+          height: 56,
+          correctLevel: window.QRCode.CorrectLevel ? window.QRCode.CorrectLevel.M : undefined,
+        });
+      } catch (e) {
+        el.innerHTML =
+          '<div class="w-full h-full flex items-center justify-center text-[9px] font-mono text-gray-400">QR</div>';
+      }
+    });
+  }
+
+  async function compressPhotoDataUrl(dataUrl) {
+    const src = String(dataUrl || "");
+    if (!src.startsWith("data:image")) return src;
+
+    const img = new Image();
+    img.src = src;
+    await new Promise((resolve) => {
+      img.onload = resolve;
+      img.onerror = resolve;
+    });
+
+    if (!img.naturalWidth || !img.naturalHeight) return src;
+
+    const targets = [320, 280, 240, 200, 160];
+    const qualities = [0.82, 0.76, 0.7];
+    const maxLen = 48000; // keep under Google Sheets 50k cell limit
+
+    for (const size of targets) {
+      const scale = size / Math.max(img.naturalWidth, img.naturalHeight);
+      const w = Math.max(1, Math.round(img.naturalWidth * scale));
+      const h = Math.max(1, Math.round(img.naturalHeight * scale));
+
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+
+      for (const q of qualities) {
+        const out = c.toDataURL("image/jpeg", q);
+        if (out.length <= maxLen) return out;
+      }
+    }
+
+    // As a last resort, return original (may fail to save in Sheets if too large)
+    return src;
   }
 
   function persistLocal() {
@@ -572,9 +666,7 @@
             paymentStatus: d.paymentStatus || d.PaymentStatus || "Unpaid",
             paidAmount: d.paidAmount || d.PaidAmount || 0,
             fee: d.fee || d.Fee || 0,
-            photoURL: normalizePhotoURL(
-              d.photoURL || d.PhotoURL || d.photo || null
-            ),
+            photoURL: resolvePhotoFromRecord(d, null),
             expiryDate: d.expiryDate || d.ExpiryDate || d.expiry || null,
             issueDate: d.issueDate || d.IssueDate || null,
             lat: d.lat ?? d.Lat ?? null,
@@ -975,7 +1067,7 @@
       state.formData.name = local.name || "";
       state.formData.lga = local.location || local.lga || LGAs[0];
       state.formData.mineral = local.mineral || "Gypsum";
-      state.formData.photoURL = normalizePhotoURL(local.photoURL || ASSETS.miningLogo);
+      state.formData.photoURL = resolvePhotoFromRecord(local, ASSETS.miningLogo);
       state.expiryDate = local.expiryDate ? new Date(local.expiryDate) : addYears(1);
       btn.innerText = "Check";
       window.setView("search-success");
@@ -1297,7 +1389,7 @@
     }
 
     state.cameraError = null;
-    state.capturedPhoto = dataUrl;
+    state.capturedPhoto = await compressPhotoDataUrl(dataUrl);
     render();
   };
 
@@ -1343,7 +1435,7 @@
         }
       }
 
-      state.formData.photoURL = base64Data;
+      state.formData.photoURL = await compressPhotoDataUrl(base64Data);
       render();
     };
     reader.readAsDataURL(file);
@@ -1853,6 +1945,7 @@
     if (!element) return;
     let cleanup = null;
     try {
+      hydrateQrCodes(element);
       cleanup = await inlineImagesForDownload(element);
       await waitForImages(element, 8000);
       const canvas = await html2canvas(element, {
@@ -2414,8 +2507,7 @@
   }
 
   function renderIDCard(id, name, lga, mineral, expiryDate, photoURL) {
-    const qrData = encodeURIComponent(String(id || "").toUpperCase());
-    const qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=" + qrData;
+    const qrText = String(id || "").toUpperCase();
     const photo = normalizePhotoURL(photoURL || ASSETS.miningLogo);
 
     return (
@@ -2471,9 +2563,9 @@
       formatDate(expiryDate || addYears(1)) +
       "</span>" +
       "</div>" +
-      '<div class="bg-white p-1 rounded shadow-lg"><img data-inline-download="1" src="' +
-      qrUrl +
-      '" class="w-14 h-14" alt="QR"></div>' +
+      '<div class="bg-white p-1 rounded shadow-lg"><div class="w-14 h-14" data-qr-text="' +
+      qrText +
+      '"></div></div>' +
       "</div>" +
       "</div>"
     );
@@ -3453,8 +3545,7 @@
     const a = state.applications.find((x) => x.id === state.previewAppId);
     if (!a) return "";
 
-    const qrData = encodeURIComponent(String(a.id || "").toUpperCase());
-    const qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=" + qrData;
+    const qrText = String(a.id || "").toUpperCase();
 
     const card =
       '<div class="relative w-[300px] h-[480px] bg-gradient-to-br from-green-800 to-green-950 rounded-xl shadow-2xl overflow-hidden text-white flex flex-col items-center pt-6 pb-4 px-4 border border-yellow-500/30 mx-auto">' +
@@ -3494,9 +3585,9 @@
       "</div>" +
       "</div>" +
       '<div class="mt-auto z-10 w-full flex justify-between items-end">' +
-      '<img data-inline-download="1" src="' +
-      qrUrl +
-      '" class="w-16 h-16 border border-white/20 p-1 bg-white rounded" alt="QR">' +
+      '<div class="w-16 h-16 border border-white/20 p-1 bg-white rounded"><div class="w-full h-full" data-qr-text="' +
+      qrText +
+      '"></div></div>' +
       '<div class="text-right"><div class="text-[10px] text-white/60 uppercase">Status</div><div class="text-sm font-bold">' +
       (a.status || "Pending") +
       "</div></div>" +
@@ -3583,6 +3674,11 @@
 
     try {
       lucide.createIcons();
+    } catch (e) {}
+
+    // Ensure QR placeholders render into real QR codes (local canvas/img)
+    try {
+      hydrateQrCodes(app);
     } catch (e) {}
 
     // Initialize / update MD map after DOM exists

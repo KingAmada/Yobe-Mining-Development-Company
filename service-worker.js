@@ -1,5 +1,5 @@
 /* eslint-disable no-restricted-globals */
-const CACHE_NAME = "yobe-mining-pwa-v4";
+const CACHE_NAME = "yobe-mining-pwa-v5";
 const CORE_ASSETS = [
   "./",
   "./index.html",
@@ -7,7 +7,7 @@ const CORE_ASSETS = [
   "./offline.html",
   "./manifest.webmanifest",
   "./assets/icon.svg",
-  "./assets/logo.jpeg",
+  "./assets/Logo.jpeg",
   "./assets/dashboard-bg.jpg",
 ];
 
