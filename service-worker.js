@@ -1,5 +1,5 @@
 /* eslint-disable no-restricted-globals */
-const CACHE_NAME = "yobe-mining-pwa-v1";
+const CACHE_NAME = "yobe-mining-pwa-v4";
 const CORE_ASSETS = [
   "./",
   "./index.html",
@@ -7,9 +7,17 @@ const CORE_ASSETS = [
   "./offline.html",
   "./manifest.webmanifest",
   "./assets/icon.svg",
+  "./assets/Logo.jpeg",
+  "./assets/dashboard-bg.jpg",
 ];
 
 function shouldCacheRequest(requestUrl) {
+  // Only cache same-origin http(s) resources. Cross-origin and non-http(s) cause
+  // subtle issues (e.g., blob: URLs and opaque/cors mode mismatches) especially
+  // with html2canvas downloads and external QR/image hosts.
+  if (requestUrl.protocol !== "http:" && requestUrl.protocol !== "https:") return false;
+  if (requestUrl.origin !== self.location.origin) return false;
+
   // Avoid caching tile servers or other large, high-churn resources.
   const host = requestUrl.hostname;
   if (
@@ -54,6 +62,13 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
 
   const url = new URL(req.url);
+
+  // Never intercept non-http(s) requests (blob:, data:, etc).
+  if (url.protocol !== "http:" && url.protocol !== "https:") return;
+
+  // Never intercept cross-origin resources.
+  if (url.origin !== self.location.origin) return;
+
   if (!shouldCacheRequest(url)) return;
 
   // Navigation: serve the app shell offline.

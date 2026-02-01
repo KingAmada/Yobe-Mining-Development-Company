@@ -3,9 +3,10 @@
     "https://script.google.com/macros/s/AKfycbyY4en4hnSaKKcomnvLYPrCCgufqVmOQ928Dvd0Q4h4q0xpH-Tf0YfAh51Q53FpXCs/exec";
 
   const ASSETS = {
-  miningLogo: "./assets/logo.jpeg",
- dashBg: null, // optional – or remove entirely
-};
+    miningLogo: "./assets/Logo.jpeg",
+    miningLogoFallback: "./assets/icon.svg",
+    dashBg: "./assets/dashboard-bg.jpg",
+  };
 
 
   // =========================
@@ -135,8 +136,9 @@
     }
   }
 
-  async function saveToGoogleSheet(sheetName, data) {
-    const payload = { action: "save", sheet: sheetName, data };
+  async function saveToGoogleSheet(sheetName, data, options) {
+    const action = (options && options.action) || "save";
+    const payload = { action, sheet: sheetName, data };
     try {
       await fetch(GOOGLE_SCRIPT_URL, {
         method: "POST",
@@ -279,6 +281,7 @@
     view: "landing",
     currentUserRole: null,
     isLoading: false,
+    authSigningIn: false,
     error: null,
     editingId: null,
 
@@ -318,6 +321,7 @@
     mdSearch: "",
 
     exitLogModal: { open: false },
+    exitForm: { id: "", quantity: "", mineral: "Gypsum" },
     qrScannerModal: { open: false },
     cameraModal: { open: false },
     cameraError: null,
@@ -441,7 +445,12 @@
     render();
   };
 
-  window.scrollToBottom = function () {
+  window.scrollToContact = function () {
+    const el = document.getElementById("contact-us");
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
     window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
   };
 
@@ -452,6 +461,70 @@
     if (/^https?:\/\//i.test(u)) return u;
     if (/^[A-Za-z0-9+/=]+$/.test(u)) return "data:image/jpeg;base64," + u;
     return u;
+  }
+
+  function pickFirst(obj, keys) {
+    if (!obj) return null;
+    for (const k of keys || []) {
+      const v = obj[k];
+      if (v === undefined || v === null) continue;
+      const s = String(v).trim();
+      if (s) return v;
+    }
+    // Try case-insensitive match
+    const lower = {};
+    Object.keys(obj).forEach((k) => {
+      lower[String(k).toLowerCase()] = k;
+    });
+    for (const k of keys || []) {
+      const realKey = lower[String(k).toLowerCase()];
+      if (!realKey) continue;
+      const v = obj[realKey];
+      if (v === undefined || v === null) continue;
+      const s = String(v).trim();
+      if (s) return v;
+    }
+    return null;
+  }
+
+  function normalizeDriveUrlMaybe(url) {
+    const u = String(url || "").trim();
+    if (!u) return "";
+
+    // drive.google.com/file/d/<ID>/view
+    const m1 = u.match(/drive\.google\.com\/file\/d\/([^/]+)\//i);
+    if (m1 && m1[1]) return "https://drive.google.com/uc?export=view&id=" + m1[1];
+
+    // drive.google.com/open?id=<ID>
+    const m2 = u.match(/drive\.google\.com\/open\?id=([^&]+)/i);
+    if (m2 && m2[1]) return "https://drive.google.com/uc?export=view&id=" + m2[1];
+
+    // drive.google.com/uc?...id=<ID>
+    const m3 = u.match(/drive\.google\.com\/uc\?(?:.*&)?id=([^&]+)/i);
+    if (m3 && m3[1]) return "https://drive.google.com/uc?export=view&id=" + m3[1];
+
+    return u;
+  }
+
+  function resolvePhotoFromRecord(rec, fallbackUrl) {
+    const raw = pickFirst(rec, [
+      "photoURL",
+      "PhotoURL",
+      "photoUrl",
+      "PhotoUrl",
+      "photo",
+      "Photo",
+      "passport",
+      "Passport",
+      "passportPhoto",
+      "PassportPhoto",
+      "image",
+      "Image",
+      "imageUrl",
+      "ImageUrl",
+    ]);
+    const normalized = normalizePhotoURL(normalizeDriveUrlMaybe(raw));
+    return normalized || fallbackUrl || null;
   }
 
   function persistLocal() {
@@ -597,13 +670,13 @@
     });
   }
 
-  async function logStaffLocation(eventType) {
+  async function logStaffLocation(eventType, opts) {
     const staffId = String(state.auth.staffId || "").trim() || "UNKNOWN";
     if (!staffId) return;
+    const silent = !!(opts && opts.silent);
 
     try {
       state.staffLocStatus.error = null;
-      render();
 
       const pos = await getGeoPosition();
       const lat = pos.coords.latitude;
@@ -638,18 +711,18 @@
         state.staffLocations = state.staffLocations.slice(-2000);
 
       persistLocal();
-      await saveToGoogleSheet("StaffLocations", payload);
-      render();
+      await saveToGoogleSheet("StaffLocations", payload, { action: "append" });
+      if (!silent) render();
     } catch (err) {
       console.error("Location log error:", err);
       state.staffLocStatus.error = "Location permission denied / unavailable.";
-      render();
+      if (!silent) render();
     }
   }
 
-  function startStaffLocationTracking() {
+  function startStaffLocationTracking(opts) {
     stopStaffLocationTracking();
-    logStaffLocation("login");
+    logStaffLocation("login", opts);
     STAFF_LOCATION_INTERVAL = setInterval(
       () => logStaffLocation("heartbeat_4hr"),
       4 * 60 * 60 * 1000
@@ -916,12 +989,17 @@
       const d = result.data || {};
       state.searchResult = d;
 
-      state.generatedId = d.id || input.toUpperCase();
-      state.formData.name = d.name || "";
-      state.formData.lga = d.location || d.lga || LGAs[0];
-      state.formData.mineral = d.mineral || "Gypsum";
-      state.formData.photoURL = normalizePhotoURL(d.photoURL || ASSETS.miningLogo);
-      state.expiryDate = d.expiryDate ? new Date(d.expiryDate) : addYears(1);
+      state.generatedId =
+        pickFirst(d, ["id", "ID", "Id"]) || input.toUpperCase();
+      state.formData.name =
+        pickFirst(d, ["name", "Name", "fullName", "Full_Name", "Full Name"]) || "";
+      state.formData.lga =
+        pickFirst(d, ["location", "Location", "lga", "LGA"]) || LGAs[0];
+      state.formData.mineral =
+        pickFirst(d, ["mineral", "Mineral"]) || "Gypsum";
+      state.formData.photoURL = resolvePhotoFromRecord(d, ASSETS.miningLogo);
+      const expRaw = pickFirst(d, ["expiryDate", "ExpiryDate", "expiry", "Expiry"]);
+      state.expiryDate = expRaw ? new Date(expRaw) : addYears(1);
 
       window.setView("search-success");
     } else {
@@ -970,11 +1048,12 @@
 
     if (result && result.result === "success") {
       const data = result.data;
-      const expiry = data.expiryDate ? new Date(data.expiryDate) : new Date();
+      const expRaw = pickFirst(data, ["expiryDate", "ExpiryDate", "expiry", "Expiry"]);
+      const expiry = expRaw ? new Date(expRaw) : new Date();
       const today = new Date();
       const diffTime = expiry - today;
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      const paymentStatus = data.paymentStatus || "Unpaid";
+      const paymentStatus = pickFirst(data, ["paymentStatus", "PaymentStatus"]) || "Unpaid";
       const paymentNeeded = diffDays < 90 && String(paymentStatus).toLowerCase() !== "paid";
 
       state.renewalStatus = { needed: paymentNeeded, daysRemaining: diffDays, data };
@@ -1089,8 +1168,7 @@
     if (!parsedId) return;
 
     if (state.scannerContext === "exitLog") {
-      const el = document.getElementById("exit-id");
-      if (el) el.value = parsedId;
+      state.exitForm.id = parsedId;
       window.closeQRScanner();
       setTimeout(updateExitRevenuePreview, 50);
       return;
@@ -1113,7 +1191,7 @@
     if (state.scanLogs.length > 3000) state.scanLogs = state.scanLogs.slice(-3000);
     persistLocal();
 
-    saveToGoogleSheet("ScanLogs", scanPayload);
+    saveToGoogleSheet("ScanLogs", scanPayload, { action: "append" });
 
     alert("ID " + parsedId + " scanned.");
     if (state.currentUserRole === "md") loadMDData();
@@ -1275,6 +1353,8 @@
   // Exit log (auto revenue)
   // =========================
   window.openExitLog = function () {
+    state.exitForm = state.exitForm || { id: "", quantity: "", mineral: "Gypsum" };
+    if (!state.exitForm.mineral) state.exitForm.mineral = "Gypsum";
     state.exitLogModal.open = true;
     render();
     setTimeout(updateExitRevenuePreview, 50);
@@ -1285,8 +1365,8 @@
   };
 
   function updateExitRevenuePreview() {
-    const qty = Number(document.getElementById("exit-amount")?.value || 0);
-    const mineral = String(document.getElementById("exit-mineral")?.value || "");
+    const qty = Number(state.exitForm?.quantity || 0);
+    const mineral = String(state.exitForm?.mineral || "");
 
     const meta = mineralMeta(mineral);
     const unit = meta.unit;
@@ -1307,14 +1387,13 @@
   window.updateExitRevenuePreview = updateExitRevenuePreview;
 
   window.submitExitLog = async function () {
-    const id = String(document.getElementById("exit-id")?.value || "").trim().toUpperCase();
-    const qty = Number(document.getElementById("exit-amount")?.value || 0);
-    const mineral = String(document.getElementById("exit-mineral")?.value || "").trim();
-    const unit = String(document.getElementById("exit-unit")?.value || "").trim();
+    const id = String(state.exitForm?.id || "").trim().toUpperCase();
+    const qty = Number(state.exitForm?.quantity || 0);
+    const mineral = String(state.exitForm?.mineral || "").trim();
 
     const meta = mineralMeta(mineral);
     const unitPrice = Number(meta.price || 0);
-    const fixedUnit = unit || meta.unit;
+    const fixedUnit = meta.unit;
 
     if (!id || !mineral || !qty || qty <= 0) {
       alert("All fields required (Quantity must be > 0)");
@@ -1353,7 +1432,7 @@
     const btn = document.querySelector("#exit-submit-btn");
     if (btn) btn.innerHTML = "Sending...";
 
-    await saveToGoogleSheet("ExitLogs", logData);
+    await saveToGoogleSheet("ExitLogs", logData, { action: "append" });
     state.exitLogModal.open = false;
 
     if (state.currentUserRole === "md") {
@@ -1578,6 +1657,7 @@
   // =========================
   window.handleAdminLogin = function (e) {
     e.preventDefault();
+    if (state.authSigningIn) return;
     const input = document.getElementById("admin-pin");
     const btn = document.getElementById("admin-submit");
 
@@ -1593,7 +1673,13 @@
       return;
     }
 
-    if (btn) btn.innerHTML = t("processing");
+    state.authSigningIn = true;
+    if (btn) {
+      btn.innerHTML = t("processing");
+      try {
+        btn.setAttribute("disabled", "true");
+      } catch (e) {}
+    }
 
     state.auth.pin = pin;
     state.auth.staffName = acct.name;
@@ -1603,22 +1689,25 @@
     state.currentUserRole = acct.role;
     state.staffLocStatus.error = null;
 
-    setTimeout(async () => {
-      await loadApplications();
+    // Fast login: show dashboard immediately with locally cached data, then refresh in background.
+    hydrateLocal();
+    if (acct.role === "md") {
+      window.setView("md-dashboard");
+      startMDRefreshLoop();
+    } else {
+      window.setView("admin-dashboard");
+      startStaffLocationTracking({ silent: true });
+    }
 
-      if (acct.role === "md") {
+    (async () => {
+      try {
+        await loadApplications();
         await loadExitLogs();
-        await loadMDData();
-        startMDRefreshLoop();
-        window.setView("md-dashboard");
-      } else {
-        await loadExitLogs();
-        startStaffLocationTracking();
-        window.setView("admin-dashboard");
+        if (acct.role === "md") await loadMDData();
+      } finally {
+        state.authSigningIn = false;
       }
-
-      if (btn) btn.innerHTML = t("portalEntry");
-    }, 450);
+    })();
   };
 
   window.manualLogLocationNow = function () {
@@ -1629,6 +1718,7 @@
   };
 
   window.logout = function () {
+    state.authSigningIn = false;
     state.currentUserRole = null;
     state.auth.role = null;
     state.auth.staffId = null;
@@ -1641,11 +1731,130 @@
     window.setView("landing");
   };
 
+  function waitForImage(img, timeoutMs) {
+    const ms = Number(timeoutMs || 6000);
+    if (!img) return Promise.resolve();
+    if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        try {
+          img.removeEventListener("load", finish);
+          img.removeEventListener("error", finish);
+        } catch (e) {}
+        resolve();
+      };
+
+      try {
+        img.addEventListener("load", finish, { once: true });
+        img.addEventListener("error", finish, { once: true });
+      } catch (e) {
+        // ignore
+      }
+
+      setTimeout(finish, ms);
+    });
+  }
+
+  async function waitForImages(root, timeoutMs) {
+    const imgs = root ? Array.from(root.querySelectorAll("img")) : [];
+    await Promise.all(imgs.map((img) => waitForImage(img, timeoutMs)));
+  }
+
+  async function fetchBlobWithFallback(url, timeoutMs) {
+    const ms = Number(timeoutMs || 8000);
+    const controller = "AbortController" in window ? new AbortController() : null;
+    const timer = setTimeout(() => {
+      try {
+        controller?.abort();
+      } catch (e) {}
+    }, ms);
+
+    try {
+      // First try normal fetch (CORS if allowed).
+      try {
+        const res = await fetch(url, { signal: controller?.signal });
+        if (res && res.ok) {
+          const ct = String(res.headers?.get("content-type") || "").toLowerCase();
+          if (ct && ct.includes("text/html")) throw new Error("Non-image response");
+          return await res.blob();
+        }
+      } catch (e) {}
+
+      // Fallback: opaque fetch often still gives a usable Blob for <img>.
+      const res2 = await fetch(url, { mode: "no-cors", signal: controller?.signal });
+      return await res2.blob();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function inlineImagesForDownload(root) {
+    // Inline ALL images inside the download root, otherwise a single cross-origin <img>
+    // will taint the html2canvas output and break toDataURL().
+    const imgs = root ? Array.from(root.querySelectorAll("img")) : [];
+    const cleanups = [];
+
+    for (const img of imgs) {
+      const src = String(img.getAttribute("src") || "");
+      if (!src || src.startsWith("data:") || src.startsWith("blob:")) continue;
+      if (img.dataset.inlineOriginalSrc) continue;
+
+      try {
+        const blob = await fetchBlobWithFallback(src, 8000);
+        const type = String(blob?.type || "").toLowerCase();
+        if (type && !type.startsWith("image/")) throw new Error("Non-image blob");
+        const objectUrl = URL.createObjectURL(blob);
+        img.dataset.inlineOriginalSrc = src;
+        img.dataset.inlineObjectUrl = objectUrl;
+        img.setAttribute("src", objectUrl);
+        cleanups.push(() => {
+          try {
+            const orig = img.dataset.inlineOriginalSrc;
+            const obj = img.dataset.inlineObjectUrl;
+            if (orig) img.setAttribute("src", orig);
+            if (obj) URL.revokeObjectURL(obj);
+            delete img.dataset.inlineOriginalSrc;
+            delete img.dataset.inlineObjectUrl;
+          } catch (e) {}
+        });
+      } catch (e) {
+        // If we can't inline, force a same-origin placeholder to avoid tainting the canvas.
+        // This also prevents html2canvas from failing on broken/cors-blocked images.
+        try {
+          img.dataset.inlineOriginalSrc = src;
+          img.setAttribute("src", "./assets/icon.svg");
+          cleanups.push(() => {
+            try {
+              const orig = img.dataset.inlineOriginalSrc;
+              if (orig) img.setAttribute("src", orig);
+              delete img.dataset.inlineOriginalSrc;
+            } catch (e2) {}
+          });
+        } catch (e2) {}
+      }
+    }
+
+    return () => {
+      cleanups.forEach((fn) => {
+        try {
+          fn();
+        } catch (e) {}
+      });
+    };
+  }
+
   // Download any element (ID card)
   window.downloadElement = async function (elementId, fileName) {
     const element = document.getElementById(elementId);
     if (!element) return;
+    let cleanup = null;
     try {
+      cleanup = await inlineImagesForDownload(element);
+      await waitForImages(element, 8000);
       const canvas = await html2canvas(element, {
         scale: 2,
         useCORS: true,
@@ -1658,6 +1867,10 @@
     } catch (err) {
       console.error("Download failed", err);
       alert("Could not generate image. Please try again.");
+    } finally {
+      try {
+        cleanup && cleanup();
+      } catch (e) {}
     }
   };
 
@@ -1734,7 +1947,7 @@
       '<div class="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-md border-2 border-white group-hover:scale-105 transition-transform overflow-hidden">' +
       '<img src="' +
       ASSETS.miningLogo +
-      '" class="w-full h-full object-cover" alt="Yobe Mining Logo" crossorigin="anonymous">' +
+      '" class="w-full h-full object-cover" alt="Yobe Mining Logo" onerror="this.onerror=null;this.src=\'./assets/icon.svg\'">' +
       "</div>" +
       "<div>" +
       '<h1 class="font-bold text-sm md:text-lg leading-tight tracking-wide">' +
@@ -1754,7 +1967,7 @@
       '<button onclick="setView(\'miner-portal\')" class="hover:text-white hover:underline">' +
       t("services") +
       "</button>" +
-      '<button onclick="scrollToBottom()" class="hover:text-white hover:underline">' +
+      '<button onclick="scrollToContact()" class="hover:text-white hover:underline">' +
       t("contact") +
       "</button>" +
       "</nav>" +
@@ -1816,7 +2029,9 @@
       '<div class="mb-4 relative">' +
       '<label class="block text-sm font-medium text-gray-700 mb-1">Artisan ID</label>' +
       '<div class="flex gap-2">' +
-      '<input type="text" id="exit-id" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-none transition-all" placeholder="ART-XXXXXX">' +
+      '<input type="text" id="exit-id" value="' +
+      String(state.exitForm?.id || "") +
+      '" oninput="state.exitForm.id = this.value" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-none transition-all" placeholder="ART-XXXXXX">' +
       '<button onclick="openQRScanner(\'exitLog\')" class="bg-blue-600 text-white px-4 rounded-xl hover:bg-blue-700 flex items-center justify-center">' +
       Icon("scan", "w-5 h-5") +
       "</button>" +
@@ -1826,13 +2041,21 @@
       '<div class="mb-4">' +
       '<label class="block text-sm font-medium text-gray-700 mb-1">Quantity</label>' +
       '<div class="flex gap-2">' +
-      '<input type="number" id="exit-amount" oninput="updateExitRevenuePreview()" class="w-2/3 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-none" placeholder="0">' +
+      '<input type="number" id="exit-amount" value="' +
+      String(state.exitForm?.quantity || "") +
+      '" oninput="state.exitForm.quantity = this.value; updateExitRevenuePreview()" class="w-2/3 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-none" placeholder="0">' +
       '<div id="exit-unit-display" class="w-1/3 px-2 py-3 bg-gray-100 border border-gray-200 rounded-xl text-center text-sm font-bold text-gray-700 flex items-center justify-center">Unit</div>' +
       '<input type="hidden" id="exit-unit" value="ton">' +
       "</div>" +
       "</div>" +
 
-      renderSelect("Mineral Type", "exit-mineral", MINERAL_NAMES, "Gypsum", "updateExitRevenuePreview()") +
+      renderSelect(
+        "Mineral Type",
+        "exit-mineral",
+        MINERAL_NAMES,
+        state.exitForm?.mineral || "Gypsum",
+        "state.exitForm.mineral = this.value; updateExitRevenuePreview()"
+      ) +
 
       '<div class="mt-2 p-3 bg-gray-50 border border-gray-200 rounded-xl text-xs">' +
       '<div class="flex items-center justify-between">' +
@@ -1943,6 +2166,11 @@
   // Pages
   // =========================
   function renderLanding() {
+    const statRegistered = "2,500+";
+    const statCompanies = "150+";
+    const statLgas = String(LGAs.length);
+    const statCompliance = "98%";
+
     return (
       '<div class="animate-fade-in-up">' +
       '<div class="relative bg-emerald-900 text-white overflow-hidden">' +
@@ -1970,7 +2198,96 @@
       "</div>" +
       "</div>" +
       "</div>" +
+
+      // Stats strip (as requested)
+      '<section class="bg-white border-t border-emerald-900/20">' +
+      '<div class="max-w-6xl mx-auto px-6 py-10 md:py-14">' +
+      '<div class="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">' +
+      '<div>' +
+      '<div class="text-4xl md:text-5xl font-black text-emerald-900 tracking-tight">' +
+      statRegistered +
+      "</div>" +
+      '<div class="mt-2 text-sm font-bold text-gray-500 uppercase tracking-widest">Registered Miners</div>' +
+      "</div>" +
+      "<div>" +
+      '<div class="text-4xl md:text-5xl font-black text-emerald-900 tracking-tight">' +
+      statCompanies +
+      "</div>" +
+      '<div class="mt-2 text-sm font-bold text-gray-500 uppercase tracking-widest">Companies</div>' +
+      "</div>" +
+      "<div>" +
+      '<div class="text-4xl md:text-5xl font-black text-emerald-900 tracking-tight">' +
+      statLgas +
+      "</div>" +
+      '<div class="mt-2 text-sm font-bold text-gray-500 uppercase tracking-widest">LGAs Covered</div>' +
+      "</div>" +
+      "<div>" +
+      '<div class="text-4xl md:text-5xl font-black text-emerald-900 tracking-tight">' +
+      statCompliance +
+      "</div>" +
+      '<div class="mt-2 text-sm font-bold text-gray-500 uppercase tracking-widest">Compliance Rate</div>' +
+      "</div>" +
+      "</div>" +
+      "</div>" +
+      "</section>" +
       "</div>"
+    );
+  }
+
+  function renderSiteFooter() {
+    const year = new Date().getFullYear();
+    return (
+      '<footer id="contact-us" class="mt-auto bg-[#0B4B3B] text-emerald-50 pt-10 pb-[calc(2.5rem+env(safe-area-inset-bottom))]">' +
+      '<div class="max-w-6xl mx-auto px-6">' +
+      '<div class="grid grid-cols-1 md:grid-cols-3 gap-10">' +
+      "<div>" +
+      '<div class="flex items-center gap-3">' +
+      '<div class="text-yellow-400">' +
+      Icon("pickaxe", "w-6 h-6") +
+      "</div>" +
+      '<div class="text-xl font-black">Yobe State Mining Company</div>' +
+      "</div>" +
+      '<p class="mt-4 text-emerald-100/90 text-sm leading-relaxed">' +
+      "Official platform for regulating mining activities within Yobe State, ensuring safety, compliance, and economic growth." +
+      "</p>" +
+      "</div>" +
+
+      "<div>" +
+      '<div class="text-yellow-400 font-black uppercase tracking-widest text-sm">Quick Links</div>' +
+      '<div class="mt-4 space-y-3 text-emerald-50/90 font-medium">' +
+      '<button onclick="setView(\\\'artisan-form\\\')" class="block hover:text-white hover:underline text-left">Apply for License</button>' +
+      '<button onclick="setView(\\\'status-check\\\')" class="block hover:text-white hover:underline text-left">Check Status</button>' +
+      '<button onclick="setView(\\\'renew-check\\\')" class="block hover:text-white hover:underline text-left">Renewals</button>' +
+      '<button onclick="setView(\\\'miner-portal\\\')" class="block hover:text-white hover:underline text-left">Digital Mining Suite</button>' +
+      "</div>" +
+      "</div>" +
+
+      "<div>" +
+      '<div class="text-yellow-400 font-black uppercase tracking-widest text-sm">Contact Us</div>' +
+      '<div class="mt-4 space-y-4 text-emerald-50/90 text-sm">' +
+      '<div class="flex items-start gap-3">' +
+      '<div class="text-yellow-400 mt-0.5">' +
+      Icon("map-pin", "w-5 h-5") +
+      "</div>" +
+      '<div>No. 12 Bukar Abba Ibrahim Way, Damaturu, Yobe State.</div>' +
+      "</div>" +
+      '<div class="flex items-start gap-3">' +
+      '<div class="text-yellow-400 mt-0.5">' +
+      Icon("phone", "w-5 h-5") +
+      "</div>" +
+      '<a class="hover:text-white hover:underline" href="tel:+23480064646942">+234 800 MINING YB</a>' +
+      "</div>" +
+      "</div>" +
+      "</div>" +
+      "</div>" +
+
+      '<div class="mt-10 pt-6 border-t border-white/10 text-center text-emerald-100/80 text-sm">' +
+      "© " +
+      year +
+      " Yobe State Mining Company. All rights reserved." +
+      "</div>" +
+      "</div>" +
+      "</footer>"
     );
   }
 
@@ -2081,7 +2398,7 @@
         ? '<div class="mt-4 flex items-center gap-3">' +
           '<img src="' +
           state.formData.photoURL +
-          '" class="w-14 h-14 rounded-full object-cover border-2 border-yellow-500 shadow-sm" crossorigin="anonymous">' +
+          '" class="w-14 h-14 rounded-full object-cover border-2 border-yellow-500 shadow-sm" onerror="this.onerror=null;this.src=\'./assets/icon.svg\'">' +
           '<div class="text-xs text-gray-500">Photo saved.</div>' +
           "</div>"
         : '<div class="mt-3 text-xs text-gray-400">No photo selected yet.</div>') +
@@ -2109,14 +2426,14 @@
       '<div class="flex flex-col items-center mb-6 z-10 text-center relative">' +
       '<img src="' +
       ASSETS.miningLogo +
-      '" class="w-12 h-12 object-contain mb-2 drop-shadow-md rounded-full bg-white/10 p-1" crossorigin="anonymous">' +
+      '" class="w-12 h-12 object-contain mb-2 drop-shadow-md rounded-full bg-white/10 p-1" onerror="this.onerror=null;this.src=\'./assets/icon.svg\'">' +
       '<h1 class="text-lg font-bold font-serif text-yellow-400">YOBE MINING DEVELOPMENT COMPANY</h1>' +
       '<div class="text-[10px] bg-yellow-500 text-black px-2 py-0.5 rounded font-bold mt-1 shadow-lg">MINER ID CARD</div>' +
       "</div>" +
       '<div class="w-32 h-32 rounded-full border-4 border-yellow-400 overflow-hidden shadow-lg mb-4 z-10 bg-gray-300 relative">' +
       '<img src="' +
       photo +
-      '" class="w-full h-full object-cover" crossorigin="anonymous">' +
+      '" class="w-full h-full object-cover" onerror="this.onerror=null;this.src=\'./assets/icon.svg\'">' +
       '<div class="absolute -bottom-3 -right-3 w-8 h-8 bg-yellow-400 rounded-full flex items-center justify-center border-2 border-white shadow-sm z-20">' +
       Icon("check", "w-5 h-5 text-emerald-900") +
       "</div>" +
@@ -2154,7 +2471,7 @@
       formatDate(expiryDate || addYears(1)) +
       "</span>" +
       "</div>" +
-      '<div class="bg-white p-1 rounded shadow-lg"><img src="' +
+      '<div class="bg-white p-1 rounded shadow-lg"><img data-inline-download="1" src="' +
       qrUrl +
       '" class="w-14 h-14" alt="QR"></div>' +
       "</div>" +
@@ -2214,7 +2531,7 @@
     const exp = state.expiryDate || addYears(1);
     const photo =
       state.formData.photoURL ||
-      (state.searchResult && state.searchResult.photoURL) ||
+      resolvePhotoFromRecord(state.searchResult, ASSETS.miningLogo) ||
       ASSETS.miningLogo;
 
     const card = renderIDCard(id, nm, lga, mineral, exp, photo);
@@ -2285,7 +2602,7 @@
       '<div class="w-20 h-20 bg-gray-200 rounded-full mx-auto mb-3 overflow-hidden border-4 border-white shadow-sm">' +
       '<img src="' +
       normalizePhotoURL(data.photoURL || ASSETS.miningLogo) +
-      '" class="w-full h-full object-cover" crossorigin="anonymous">' +
+      '" class="w-full h-full object-cover" onerror="this.onerror=null;this.src=\'./assets/icon.svg\'">' +
       "</div>" +
       '<h2 class="text-xl font-bold text-gray-900">' +
       (data.name || "—") +
@@ -3144,13 +3461,13 @@
       '<div class="flex flex-col items-center mb-4 z-10 text-center">' +
       '<img src="' +
       ASSETS.miningLogo +
-      '" class="w-12 h-12 object-contain mb-1 rounded-full bg-white/10 p-1" crossorigin="anonymous">' +
+      '" class="w-12 h-12 object-contain mb-1 rounded-full bg-white/10 p-1" onerror="this.onerror=null;this.src=\'./assets/icon.svg\'">' +
       '<h1 class="text-sm font-bold font-serif text-yellow-400">YOBE MINING DEVELOPMENT COMPANY</h1>' +
       "</div>" +
       '<div class="w-24 h-24 rounded-full border-2 border-yellow-400 overflow-hidden shadow-lg mb-2 z-10 bg-gray-300">' +
       '<img src="' +
       normalizePhotoURL(a.photoURL || ASSETS.miningLogo) +
-      '" class="w-full h-full object-cover" crossorigin="anonymous">' +
+      '" class="w-full h-full object-cover" onerror="this.onerror=null;this.src=\'./assets/icon.svg\'">' +
       "</div>" +
       '<div class="text-center z-10 w-full">' +
       '<h2 class="text-lg font-bold text-white truncate">' +
@@ -3177,7 +3494,7 @@
       "</div>" +
       "</div>" +
       '<div class="mt-auto z-10 w-full flex justify-between items-end">' +
-      '<img src="' +
+      '<img data-inline-download="1" src="' +
       qrUrl +
       '" class="w-16 h-16 border border-white/20 p-1 bg-white rounded" alt="QR">' +
       '<div class="text-right"><div class="text-[10px] text-white/60 uppercase">Status</div><div class="text-sm font-bold">' +
@@ -3262,19 +3579,7 @@
       renderQRScannerModal() +
       renderCameraModal() +
       renderIOSInstallHint() +
-      '<footer class="mt-auto bg-emerald-900 text-emerald-100 pt-8 pb-[calc(2rem+env(safe-area-inset-bottom))]">' +
-      '<div class="max-w-6xl mx-auto px-6">' +
-      '<div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">' +
-      '<div class="text-sm">' +
-      '<div class="font-bold">YOBE MINING DEVELOPMENT COMPANY</div>' +
-      '<div class="text-xs text-emerald-200">Official Compliance & Verification Portal</div>' +
-      "</div>" +
-      '<div class="text-xs text-emerald-200">© ' +
-      new Date().getFullYear() +
-      " • Support: admin desk</div>" +
-      "</div>" +
-      "</div>" +
-      "</footer>";
+      renderSiteFooter();
 
     try {
       lucide.createIcons();
@@ -3311,5 +3616,12 @@
 
   // Boot
   hydrateLocal();
+  if (window.location && window.location.protocol === "file:") {
+    // PWA + manifest + service worker + camera permissions + CORS won't work reliably on file://
+    // The app must be served over http(s).
+    setTimeout(() => {
+      alert("Open this app via http://localhost (or HTTPS). Do not open index.html with file://.");
+    }, 50);
+  }
   render();
 })();
