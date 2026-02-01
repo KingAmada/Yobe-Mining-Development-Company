@@ -7,7 +7,7 @@ const CORE_ASSETS = [
   "./offline.html",
   "./manifest.webmanifest",
   "./assets/icon.svg",
-  "./assets/Logo.jpeg",
+  "./assets/logo.jpeg",
   "./assets/dashboard-bg.jpg",
 ];
 
