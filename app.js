@@ -3,7 +3,7 @@
     "https://script.google.com/macros/s/AKfycbyY4en4hnSaKKcomnvLYPrCCgufqVmOQ928Dvd0Q4h4q0xpH-Tf0YfAh51Q53FpXCs/exec";
 
   const ASSETS = {
-    miningLogo: "./assets/Logo.jpeg",
+    miningLogo: "./assets/logo.jpeg",
     miningLogoFallback: "./assets/icon.svg",
     dashBg: "./assets/dashboard-bg.jpg",
   };
