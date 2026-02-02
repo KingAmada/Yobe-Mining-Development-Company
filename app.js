@@ -285,6 +285,10 @@
     error: null,
     editingId: null,
 
+    ui: {
+      mobileMenuOpen: false,
+    },
+
     pwa: {
       isIOS: isIOS(),
       isStandalone: isStandalone(),
@@ -397,6 +401,7 @@
   window.installApp = async function () {
     refreshStandaloneFlags();
     if (state.pwa.isStandalone) return;
+    if (state.ui) state.ui.mobileMenuOpen = false;
 
     if (state.pwa.isIOS) {
       alert(
@@ -436,22 +441,37 @@
   window.setView = function (view) {
     state.view = view;
     state.error = null;
+    if (state.ui) state.ui.mobileMenuOpen = false;
     window.scrollTo({ top: 0, behavior: "auto" });
     render();
   };
 
   window.toggleLang = function () {
     state.lang = state.lang === "en" ? "ha" : "en";
+    if (state.ui) state.ui.mobileMenuOpen = false;
+    render();
+  };
+
+  window.toggleMobileMenu = function (force) {
+    if (!state.ui) state.ui = { mobileMenuOpen: false };
+    if (typeof force === "boolean") state.ui.mobileMenuOpen = force;
+    else state.ui.mobileMenuOpen = !state.ui.mobileMenuOpen;
     render();
   };
 
   window.scrollToContact = function () {
-    const el = document.getElementById("contact-us");
-    if (el && typeof el.scrollIntoView === "function") {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
+    if (state.ui && state.ui.mobileMenuOpen) {
+      state.ui.mobileMenuOpen = false;
+      render();
     }
-    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+    requestAnimationFrame(() => {
+      const el = document.getElementById("contact-us");
+      if (el && typeof el.scrollIntoView === "function") {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+    });
   };
 
   function normalizePhotoURL(url) {
@@ -2030,20 +2050,24 @@
   }
 
   function renderHeader() {
+    const isMobileViewport = !!window.matchMedia?.("(max-width: 767px)")?.matches;
+    const isAndroid = /android/i.test(navigator.userAgent || "");
     const showInstall =
-      !state.pwa.isStandalone && (state.pwa.canInstall || state.pwa.isIOS);
+      !state.pwa.isStandalone &&
+      (state.pwa.canInstall || state.pwa.isIOS || isAndroid || isMobileViewport);
+    const mobileMenuOpen = !!(state.ui && state.ui.mobileMenuOpen);
 
     return (
       '<header class="bg-gradient-to-r from-emerald-900 to-emerald-700 text-white shadow-lg sticky top-0 z-50 pb-4 pt-[calc(1rem+env(safe-area-inset-top))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))]">' +
-      '<div class="flex justify-between items-center max-w-6xl mx-auto">' +
-      '<div class="flex items-center space-x-3 cursor-pointer group" onclick="setView(\'landing\')">' +
+      '<div class="flex items-center justify-between gap-3 max-w-6xl mx-auto">' +
+      '<div class="flex items-center space-x-3 cursor-pointer group min-w-0" onclick="setView(\'landing\')">' +
       '<div class="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-md border-2 border-white group-hover:scale-105 transition-transform overflow-hidden">' +
       '<img src="' +
       ASSETS.miningLogo +
       '" class="w-full h-full object-cover" alt="Yobe Mining Logo" onerror="this.onerror=null;this.src=\'./assets/icon.svg\'">' +
       "</div>" +
-      "<div>" +
-      '<h1 class="font-bold text-sm md:text-lg leading-tight tracking-wide">' +
+      '<div class="min-w-0">' +
+      '<h1 class="font-bold text-sm md:text-lg leading-tight tracking-wide truncate">' +
       t("appTitle") +
       "</h1>" +
       '<p class="text-[10px] md:text-xs text-emerald-200 uppercase tracking-wider hidden md:block">' +
@@ -2052,7 +2076,7 @@
       "</div>" +
       "</div>" +
 
-      '<div class="flex items-center space-x-2 md:space-x-4">' +
+      '<div class="flex items-center gap-2 md:gap-4 shrink-0">' +
       '<nav class="hidden md:flex space-x-6 text-sm font-medium text-emerald-100">' +
       '<button onclick="setView(\'landing\')" class="hover:text-white hover:underline">' +
       t("home") +
@@ -2065,19 +2089,56 @@
       "</button>" +
       "</nav>" +
 
+      '<button onclick="toggleMobileMenu()" class="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 transition border border-white/20 backdrop-blur-sm" aria-label="Menu">' +
+      (mobileMenuOpen ? Icon("x", "w-5 h-5") : Icon("menu", "w-5 h-5")) +
+      "</button>" +
+
       (showInstall
-        ? '<button onclick="installApp()" class="flex items-center bg-yellow-400 hover:bg-yellow-300 text-emerald-950 px-3 py-1.5 rounded-full transition-all text-xs md:text-sm font-black border border-yellow-200 shadow-sm">' +
-          Icon("download", "w-4 h-4 mr-2") +
-          "Install" +
+        ? '<button onclick="installApp()" class="inline-flex items-center justify-center bg-yellow-400 hover:bg-yellow-300 text-emerald-950 w-10 h-10 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-full transition-all text-xs md:text-sm font-black border border-yellow-200 shadow-sm">' +
+          Icon("download", "w-4 h-4 sm:mr-2") +
+          '<span class="hidden sm:inline">Install</span>' +
           "</button>"
         : "") +
 
-      '<button onclick="toggleLang()" class="flex items-center bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-full transition-all text-xs md:text-sm font-medium border border-white/20 backdrop-blur-sm">' +
-      Icon("languages", "w-4 h-4 mr-2") +
+      '<button onclick="toggleLang()" class="inline-flex items-center justify-center bg-white/10 hover:bg-white/20 w-10 h-10 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-full transition-all text-xs md:text-sm font-medium border border-white/20 backdrop-blur-sm">' +
+      Icon("languages", "w-4 h-4 sm:mr-2") +
+      '<span class="hidden sm:inline">' +
       (state.lang === "en" ? "HA" : "EN") +
+      "</span>" +
+      '<span class="sm:hidden font-black">' +
+      (state.lang === "en" ? "HA" : "EN") +
+      "</span>" +
       "</button>" +
       "</div>" +
       "</div>" +
+
+      (mobileMenuOpen
+        ? '<div class="md:hidden max-w-6xl mx-auto mt-3">' +
+          '<div class="bg-white/10 border border-white/15 rounded-2xl p-3 backdrop-blur-sm">' +
+          '<div class="grid grid-cols-1 gap-2 text-sm font-bold">' +
+          '<button onclick="setView(\'landing\')" class="w-full text-left px-3 py-3 rounded-xl hover:bg-white/10 transition flex items-center gap-2">' +
+          Icon("home", "w-4 h-4") +
+          t("home") +
+          "</button>" +
+          '<button onclick="setView(\'miner-portal\')" class="w-full text-left px-3 py-3 rounded-xl hover:bg-white/10 transition flex items-center gap-2">' +
+          Icon("pickaxe", "w-4 h-4") +
+          t("services") +
+          "</button>" +
+          (showInstall
+            ? '<button onclick="installApp()" class="w-full text-left px-3 py-3 rounded-xl hover:bg-white/10 transition flex items-center gap-2">' +
+              Icon("download", "w-4 h-4") +
+              "Install" +
+              "</button>"
+            : "") +
+          '<button onclick="scrollToContact()" class="w-full text-left px-3 py-3 rounded-xl hover:bg-white/10 transition flex items-center gap-2">' +
+          Icon("phone", "w-4 h-4") +
+          t("contact") +
+          "</button>" +
+          "</div>" +
+          "</div>" +
+          "</div>"
+        : "") +
+
       "</header>"
     );
   }
