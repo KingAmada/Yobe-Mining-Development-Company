@@ -2348,10 +2348,11 @@
       "<div>" +
       '<div class="text-yellow-400 font-black uppercase tracking-widest text-sm">Quick Links</div>' +
       '<div class="mt-4 space-y-3 text-emerald-50/90 font-medium">' +
-      '<button onclick="setView(\\\'artisan-form\\\')" class="block hover:text-white hover:underline text-left">Apply for License</button>' +
-      '<button onclick="setView(\\\'status-check\\\')" class="block hover:text-white hover:underline text-left">Check Status</button>' +
-      '<button onclick="setView(\\\'renew-check\\\')" class="block hover:text-white hover:underline text-left">Renewals</button>' +
-      '<button onclick="setView(\\\'miner-portal\\\')" class="block hover:text-white hover:underline text-left">Digital Mining Suite</button>' +
+      '<button onclick="setView(\'artisan-form\')" class="block hover:text-white hover:underline text-left">Apply for License</button>' +
+      '<button onclick="setView(\'status-check\')" class="block hover:text-white hover:underline text-left">Check Status</button>' +
+      '<button onclick="setView(\'renew-check\')" class="block hover:text-white hover:underline text-left">Renewals</button>' +
+      '<button onclick="setView(\'miner-portal\')" class="block hover:text-white hover:underline text-left">Digital Mining Suite</button>' +
+      '<button onclick="scrollToContact()" class="block hover:text-white hover:underline text-left">Contact Us</button>' +
       "</div>" +
       "</div>" +
 
@@ -2368,7 +2369,7 @@
       '<div class="text-yellow-400 mt-0.5">' +
       Icon("phone", "w-5 h-5") +
       "</div>" +
-      '<a class="hover:text-white hover:underline" href="tel:+23480064646942">+234 800 MINING YB</a>' +
+      '<a class="hover:text-white hover:underline" href="tel:+23480064646992">+234 800 MINING YB</a>' +
       "</div>" +
       "</div>" +
       "</div>" +
